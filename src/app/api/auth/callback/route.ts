@@ -46,12 +46,10 @@ export async function GET(request: NextRequest) {
 
   const tokenData = await tokenResponse.json();
 
-  // Store session in KV
   await setSession({
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token,
     expiresAt: Date.now() + tokenData.expires_in * 1000,
-    playlistId: process.env.PLAYLIST_ID,
   });
 
   return NextResponse.redirect(new URL("/", request.url));
