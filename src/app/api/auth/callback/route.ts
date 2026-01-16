@@ -18,7 +18,6 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/?error=no_code", request.url));
   }
 
-  // Exchange code for tokens
   const params = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -37,8 +36,6 @@ export async function GET(request: NextRequest) {
   });
 
   if (!tokenResponse.ok) {
-    const errorText = await tokenResponse.text();
-    console.error("Token exchange failed:", errorText);
     return NextResponse.redirect(
       new URL("/?error=token_exchange_failed", request.url)
     );
@@ -46,12 +43,10 @@ export async function GET(request: NextRequest) {
 
   const tokenData = await tokenResponse.json();
 
-  // Store session in KV
   await setSession({
     accessToken: tokenData.access_token,
     refreshToken: tokenData.refresh_token,
     expiresAt: Date.now() + tokenData.expires_in * 1000,
-    playlistId: process.env.PLAYLIST_ID,
   });
 
   return NextResponse.redirect(new URL("/", request.url));

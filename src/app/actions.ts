@@ -1,139 +1,132 @@
 "use server";
 
-import { getSession, updateSession } from "@/lib/kv";
-import { spotifyFetch, SpotifyDevicesResponse, SpotifyPlaylist, SpotifyCurrentlyPlaying } from "@/lib/spotify";
+import {
+  getSession,
+  getPlaylistProgress,
+  getPlaylistTrackIndexCache,
+  setPlaylistTrackIndexCache,
+  updateProgressIfFurther,
+} from "@/lib/kv";
+import { spotifyFetch } from "@/lib/spotify";
+import {
+  SpotifyPlaylistSchema,
+  SpotifyPlaylistMetaSchema,
+  SpotifyPlaylistTracksPageSchema,
+  type Playlist,
+} from "@/lib/schemas";
 
-export interface Device {
-  id: string;
-  name: string;
-  type: string;
-  is_active: boolean;
-}
-
-export interface Progress {
-  lastPlayedTrackUri: string | null;
-  lastPlayedPosition: number | null;
-  playlistId: string | null;
-  playlistName: string | null;
-  playlistTotal: number | null;
-}
-
-export async function getProgress(): Promise<Progress | null> {
+export async function getPlaylist(): Promise<Playlist | null> {
   const session = await getSession();
   if (!session) return null;
 
-  const playlist = session.playlistId
-    ? await spotifyFetch<SpotifyPlaylist>(`/playlists/${session.playlistId}`)
-    : null;
+  const playlistId = process.env.PLAYLIST_ID;
+  if (!playlistId) throw new Error("PLAYLIST_ID not configured");
+
+  const data = await spotifyFetch(`/playlists/${playlistId}`);
+  const playlist = SpotifyPlaylistSchema.parse(data);
 
   return {
-    lastPlayedTrackUri: session.lastPlayedTrackUri || null,
-    lastPlayedPosition: session.lastPlayedPosition ?? null,
-    playlistId: session.playlistId || null,
-    playlistName: playlist?.name || null,
-    playlistTotal: playlist?.tracks.total || null,
+    id: playlistId,
+    name: playlist.name,
+    total: playlist.tracks.total,
   };
 }
 
-export async function getDevices(): Promise<Device[]> {
-  const data = await spotifyFetch<SpotifyDevicesResponse>("/me/player/devices");
-  return data?.devices || [];
+export async function getFurthestIndex(): Promise<number | null> {
+  const progress = await getPlaylistProgress();
+  return progress?.furthestIndex ?? null;
 }
 
-export async function playOnDevice(deviceId: string): Promise<{ success: boolean; error?: string }> {
+export async function playOnDevice(
+  deviceId: string
+): Promise<{ success: boolean; error?: string }> {
   const session = await getSession();
+  if (!session) return { success: false, error: "Not authenticated" };
 
-  if (!session) {
-    return { success: false, error: "Not authenticated" };
-  }
+  const playlistId = process.env.PLAYLIST_ID;
+  if (!playlistId) return { success: false, error: "No playlist configured" };
 
-  if (!session.playlistId) {
-    return { success: false, error: "No playlist configured" };
-  }
+  const progress = await getPlaylistProgress();
 
-  const playbackBody: Record<string, unknown> = {
-    context_uri: `spotify:playlist:${session.playlistId}`,
+  const body: Record<string, unknown> = {
+    context_uri: `spotify:playlist:${playlistId}`,
   };
 
-  if (session.lastPlayedPosition !== undefined) {
-    playbackBody.offset = { position: session.lastPlayedPosition };
+  if (progress?.furthestIndex !== undefined) {
+    body.offset = { position: progress.furthestIndex };
   }
 
-  const result = await spotifyFetch(`/me/player/play?device_id=${deviceId}`, {
-    method: "PUT",
-    body: JSON.stringify(playbackBody),
-  });
-
-  if (result === null) {
-    return { success: false, error: "Failed to start playback" };
+  try {
+    await spotifyFetch(`/me/player/play?device_id=${deviceId}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    });
+    return { success: true };
+  } catch {
+    return { success: false, error: "Device not available" };
   }
-
-  return { success: true };
 }
 
-export async function syncProgress(): Promise<{
-  success: boolean;
-  error?: string;
-  trackName?: string;
-  artist?: string;
-  position?: number;
+export async function syncTrackPosition(trackUri: string): Promise<{
+  position: number;
+  updated: boolean;
 }> {
   const session = await getSession();
+  if (!session) throw new Error("Not authenticated");
 
-  if (!session) {
-    return { success: false, error: "Not authenticated" };
+  const playlistId = process.env.PLAYLIST_ID;
+  if (!playlistId) throw new Error("No playlist configured");
+
+  const position = await getTrackPositionInPlaylist(playlistId, trackUri);
+  if (position === null) throw new Error("Track not found in playlist");
+
+  const updated = await updateProgressIfFurther(position);
+
+  return { position, updated };
+}
+
+async function getTrackPositionInPlaylist(
+  playlistId: string,
+  trackUri: string
+): Promise<number | null> {
+  const metaData = await spotifyFetch(`/playlists/${playlistId}?fields=snapshot_id,tracks.total`);
+  const meta = SpotifyPlaylistMetaSchema.parse(metaData);
+
+  const cached = await getPlaylistTrackIndexCache(playlistId);
+  if (cached && cached.snapshotId === meta.snapshot_id) {
+    const pos = cached.indexByUri[trackUri];
+    return typeof pos === "number" ? pos : null;
   }
 
-  const current = await spotifyFetch<SpotifyCurrentlyPlaying>("/me/player/currently-playing");
-
-  if (!current || !current.item) {
-    return { success: false, error: "Nothing currently playing" };
-  }
-
-  const playlistUri = `spotify:playlist:${session.playlistId}`;
-  if (current.context?.uri !== playlistUri) {
-    return { success: false, error: "Not playing from tracked playlist" };
-  }
-
-  const trackUri = current.item.uri;
-  let position: number | null = null;
+  const indexByUri: Record<string, number> = {};
   let offset = 0;
   const limit = 100;
 
-  while (position === null) {
-    const tracksResponse = await spotifyFetch<{
-      items: { track: { uri: string } }[];
-      total: number;
-    }>(`/playlists/${session.playlistId}/tracks?offset=${offset}&limit=${limit}`);
-
-    if (!tracksResponse) break;
-
-    const index = tracksResponse.items.findIndex(
-      (item) => item.track?.uri === trackUri
+  while (offset < meta.tracks.total) {
+    const pageData = await spotifyFetch(
+      `/playlists/${playlistId}/tracks?offset=${offset}&limit=${limit}&fields=items(track(uri)),total`
     );
+    const page = SpotifyPlaylistTracksPageSchema.parse(pageData);
 
-    if (index !== -1) {
-      position = offset + index;
-      break;
+    for (let i = 0; i < page.items.length; i++) {
+      const uri = page.items[i]?.track?.uri ?? null;
+      if (uri && indexByUri[uri] === undefined) {
+        indexByUri[uri] = offset + i;
+      }
     }
 
     offset += limit;
-    if (offset >= tracksResponse.total) break;
+    if (offset >= page.total) break;
   }
 
-  if (position === null) {
-    return { success: false, error: "Track not found in playlist" };
-  }
-
-  await updateSession({
-    lastPlayedTrackUri: trackUri,
-    lastPlayedPosition: position,
+  await setPlaylistTrackIndexCache(playlistId, {
+    playlistId,
+    snapshotId: meta.snapshot_id,
+    total: meta.tracks.total,
+    createdAt: Date.now(),
+    indexByUri,
   });
 
-  return {
-    success: true,
-    trackName: current.item.name,
-    artist: current.item.artists.map((a) => a.name).join(", "),
-    position,
-  };
+  const pos = indexByUri[trackUri];
+  return typeof pos === "number" ? pos : null;
 }
