@@ -200,7 +200,6 @@ export const Player = observer(function Player() {
   );
 });
 
-// Icons
 function MusicIcon({ className }: { className?: string }) {
   return (
     <svg

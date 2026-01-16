@@ -6,19 +6,20 @@ import { Player } from "@/components/Player";
 import { playerStore, progressStore } from "@/stores";
 
 const Home = observer(function Home() {
+  const { playlist } = progressStore;
+
   useEffect(() => {
-    progressStore.fetchProgress();
+    progressStore.fetchPlaylist();
+    progressStore.fetchFurthestIndex();
   }, []);
 
-  const isAuthenticated = progressStore.progress !== null;
-
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!playlist) return;
     playerStore.init();
     return () => playerStore.disconnect();
-  }, [isAuthenticated]);
+  }, [playlist]);
 
-  if (progressStore.loading) {
+  if (progressStore.loading && !playlist) {
     return (
       <main className="min-h-screen flex items-center justify-center bg-zinc-950 text-white">
         <p className="text-zinc-400">Loading...</p>
@@ -26,11 +27,10 @@ const Home = observer(function Home() {
     );
   }
 
-  if (!progressStore.progress) {
+  if (!playlist) {
     return (
       <main className="min-h-screen flex flex-col items-center justify-center bg-zinc-950 text-white gap-6">
         <h1 className="text-2xl font-bold">PJ 5404</h1>
-
         <a
           href="/api/auth/spotify"
           className="bg-green-600 hover:bg-green-500 px-6 py-3 rounded-full font-semibold transition-colors"
@@ -41,34 +41,24 @@ const Home = observer(function Home() {
     );
   }
 
-  const { progress, progressPercent } = progressStore;
+  const { furthestIndex, progressPercent } = progressStore;
 
   return (
     <main className="min-h-screen bg-zinc-950 text-white p-8">
       <div className="max-w-xl mx-auto space-y-6">
-        {/* Header & Progress */}
         <div className="space-y-4">
-          <div className="space-y-1">
-            <h1 className="text-2xl font-bold">Playlist Progress</h1>
-            {progress.playlistName && (
-              <p className="text-zinc-400">{progress.playlistName}</p>
-            )}
-          </div>
+          <h1 className="text-2xl font-bold">{playlist.name}</h1>
 
           <div className="bg-zinc-900 rounded-lg p-4 space-y-3">
             <div className="flex justify-between items-center">
               <span className="text-zinc-400">Furthest Position</span>
               <span className="text-xl font-mono">
-                {progress.furthestIndex !== null
-                  ? progress.furthestIndex + 1
-                  : "—"}
-                <span className="text-zinc-500 text-base">
-                  {progress.playlistTotal ? ` / ${progress.playlistTotal}` : ""}
-                </span>
+                {furthestIndex !== null ? furthestIndex + 1 : "—"}
+                <span className="text-zinc-500 text-base"> / {playlist.total}</span>
               </span>
             </div>
 
-            {progress.playlistTotal && progress.furthestIndex !== null && (
+            {furthestIndex !== null && (
               <div className="space-y-1">
                 <div className="w-full bg-zinc-800 rounded-full h-2">
                   <div
@@ -90,9 +80,7 @@ const Home = observer(function Home() {
           </div>
         )}
 
-        {/* Player */}
         <div className="space-y-3">
-          <h2 className="text-lg font-semibold text-zinc-300">Web Player</h2>
           <Player />
 
           {playerStore.isReady && !playerStore.track && (
@@ -102,7 +90,7 @@ const Home = observer(function Home() {
               }
               className="w-full bg-green-600 hover:bg-green-500 px-4 py-3 rounded-lg font-semibold transition-colors"
             >
-              Start Playing from Furthest Position
+              Play current song
             </button>
           )}
         </div>

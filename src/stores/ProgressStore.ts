@@ -1,13 +1,10 @@
 import { flow, makeAutoObservable } from "mobx";
-import {
-  getProgress,
-  playOnDevice,
-  syncTrackPosition,
-  Progress,
-} from "@/app/actions";
+import { getPlaylist, getFurthestIndex, playOnDevice, syncTrackPosition } from "@/app/actions";
+import { Playlist } from "@/lib/schemas";
 
 export class ProgressStore {
-  progress: Progress | null = null;
+  playlist: Playlist | null = null;
+  furthestIndex: number | null = null;
   loading = true;
   error: string | null = null;
   private lastTrackUri: string | null = null;
@@ -16,16 +13,23 @@ export class ProgressStore {
     makeAutoObservable(this, {}, { autoBind: true });
   }
 
-  fetchProgress = flow(function* (this: ProgressStore) {
+  fetchPlaylist = flow(function* (this: ProgressStore) {
     this.loading = true;
     this.error = null;
     try {
-      const data: Progress | null = yield getProgress();
-      this.progress = data;
+      this.playlist = yield getPlaylist();
     } catch {
-      this.error = "Failed to load progress";
+      this.error = "Failed to load playlist";
     } finally {
       this.loading = false;
+    }
+  });
+
+  fetchFurthestIndex = flow(function* (this: ProgressStore) {
+    try {
+      this.furthestIndex = yield getFurthestIndex();
+    } catch {
+      this.error = "Failed to load progress";
     }
   });
 
@@ -34,17 +38,10 @@ export class ProgressStore {
       const result: Awaited<ReturnType<typeof syncTrackPosition>> =
         yield syncTrackPosition(trackUri);
       if (result.updated) {
-        yield this.fetchProgress();
+        this.furthestIndex = result.position;
       }
-      return result;
     } catch (e) {
       this.error = e instanceof Error ? e.message : "Failed to sync progress";
-      return {
-        success: false,
-        position: null,
-        updated: false,
-        error: this.error,
-      };
     }
   });
 
@@ -70,14 +67,7 @@ export class ProgressStore {
   });
 
   get progressPercent(): number {
-    if (!this.progress?.playlistTotal || this.progress.furthestIndex === null)
-      return 0;
-    return (
-      ((this.progress.furthestIndex + 1) / this.progress.playlistTotal) * 100
-    );
-  }
-
-  get isAuthenticated(): boolean {
-    return this.progress !== null;
+    if (!this.playlist || this.furthestIndex === null) return 0;
+    return ((this.furthestIndex + 1) / this.playlist.total) * 100;
   }
 }

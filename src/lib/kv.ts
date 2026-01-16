@@ -1,30 +1,23 @@
 import { Redis } from "@upstash/redis";
+import {
+  SpotifySessionSchema,
+  PlaylistProgressSchema,
+  PlaylistTrackIndexCacheSchema,
+  type SpotifySession,
+  type PlaylistProgress,
+  type PlaylistTrackIndexCache,
+} from "./schemas";
 
 const redis = Redis.fromEnv();
 const SESSION_KEY = "spotify:session";
 const PROGRESS_KEY = "playlist:progress";
 const TRACK_INDEX_CACHE_PREFIX = "playlist:trackIndex:";
 
-export interface SpotifySession {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: number;
-}
-
-export interface PlaylistProgress {
-  furthestIndex: number; // 0-based, only increments forward
-}
-
-export interface PlaylistTrackIndexCache {
-  playlistId: string;
-  snapshotId: string;
-  total: number;
-  createdAt: number;
-  indexByUri: Record<string, number>;
-}
-
 export async function getSession(): Promise<SpotifySession | null> {
-  return redis.get<SpotifySession>(SESSION_KEY);
+  const data = await redis.get(SESSION_KEY);
+  if (!data) return null;
+  const result = SpotifySessionSchema.safeParse(data);
+  return result.success ? result.data : null;
 }
 
 export async function setSession(session: SpotifySession): Promise<void> {
@@ -36,7 +29,6 @@ export async function updateSession(
 ): Promise<void> {
   const current = await getSession();
   if (!current) return;
-
   await redis.set(SESSION_KEY, { ...current, ...updates });
 }
 
@@ -45,7 +37,10 @@ export async function clearSession(): Promise<void> {
 }
 
 export async function getPlaylistProgress(): Promise<PlaylistProgress | null> {
-  return redis.get<PlaylistProgress>(PROGRESS_KEY);
+  const data = await redis.get(PROGRESS_KEY);
+  if (!data) return null;
+  const result = PlaylistProgressSchema.safeParse(data);
+  return result.success ? result.data : null;
 }
 
 export async function setPlaylistProgress(
@@ -68,15 +63,16 @@ export async function updateProgressIfFurther(
 export async function getPlaylistTrackIndexCache(
   playlistId: string
 ): Promise<PlaylistTrackIndexCache | null> {
-  return redis.get<PlaylistTrackIndexCache>(
-    `${TRACK_INDEX_CACHE_PREFIX}${playlistId}`
-  );
+  const data = await redis.get(`${TRACK_INDEX_CACHE_PREFIX}${playlistId}`);
+  if (!data) return null;
+  const result = PlaylistTrackIndexCacheSchema.safeParse(data);
+  return result.success ? result.data : null;
 }
 
 export async function setPlaylistTrackIndexCache(
   playlistId: string,
   cache: PlaylistTrackIndexCache,
-  ttlSeconds = 60 * 60 // 1 hour
+  ttlSeconds = 30 * 24 * 60 * 60 // tracks are static
 ): Promise<void> {
   await redis.set(`${TRACK_INDEX_CACHE_PREFIX}${playlistId}`, cache, {
     ex: ttlSeconds,

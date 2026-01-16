@@ -1,7 +1,6 @@
 import { action, flow, makeAutoObservable } from "mobx";
 
 export class PlayerStore {
-  // Spotify Web Playback SDK state
   isReady = false;
   deviceId: string | null = null;
   track: Spotify.Track | null = null;
@@ -40,12 +39,7 @@ export class PlayerStore {
       this.position = state.position;
       this.duration = state.duration;
       this.paused = state.paused;
-      try {
-        this.onPlayerStateChangedCb(state);
-      } catch (e) {
-        // Never let a consumer break the player store.
-        console.error("PlayerStore onPlayerStateChanged callback failed", e);
-      }
+      this.onPlayerStateChangedCb(state);
     }
   );
 
@@ -114,7 +108,6 @@ export class PlayerStore {
     }
   });
 
-  // Player controls
   async togglePlay() {
     await this.player?.togglePlay();
   }

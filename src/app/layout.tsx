@@ -19,6 +19,9 @@ export default function RootLayout({
     <html lang="en">
       <body className={inter.className}>
         {children}
+        <Script id="spotify-sdk-callback" strategy="beforeInteractive">
+          {`window.onSpotifyWebPlaybackSDKReady = () => {};`}
+        </Script>
         <Script
           src="https://sdk.scdn.co/spotify-player.js"
           strategy="afterInteractive"
